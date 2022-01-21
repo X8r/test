@@ -1,0 +1,53 @@
+*&---------------------------------------------------------------------*
+*& Report  ZPM_R_UPDATE_CUSTOMTABLE
+*----------------------------------------------------------------------*
+* Author          : Venkata Vijay Bhushan Ala/Padmini Manickaraj
+* Creation Date   : 22-May-2014
+* Technical Design:EAM-ALL Custom Program to Load Z tables
+* Transaction Code: ZPMUPLOAD
+* Transport number: NA
+* Description     : Program to Update Entries for any Custom Table
+*----------------------------------------------------------------------*
+* Modification Information
+*----------------------------------------------------------------------*
+* Date            : 29-Jul-2014
+* Author          : Swetha Srujitha Choundraju/C830446
+* Change request  : 8000006596
+* Transport number: DE3K913528
+* Description     : To create the change documents on the custom tables
+*                   for which the custom change document object exists.
+*----------------------------------------------------------------------*
+* Date            : 29-Oct-2014
+* Author          : Satya Sireesha Kolluri/C830803
+* Change request  : 8000008012
+* Transport number: DE3K915801
+* Description     : To enable the code for Conversion Routines if exist
+*                   in any of the table fields.
+*----------------------------------------------------------------------*
+REPORT zpm_r_update_customtable MESSAGE-ID zpm_all.
+
+* Top Include
+INCLUDE zpm_r_update_customtable_top.
+
+
+* Selection screen Include
+INCLUDE zpm_r_update_customtable_sel.
+
+
+* Include for Subroutines
+INCLUDE zpm_r_update_customtable_f01.
+
+
+START-OF-SELECTION.
+
+* Convert the date and Upload file data into custom tables
+  PERFORM main_perform.
+
+
+END-OF-SELECTION.
+
+  IF p_dwnlod NE c_x.
+* Create Factory ALV and display result
+    PERFORM f_show_result.
+
+  ENDIF.
