@@ -1,0 +1,116 @@
+*&---------------------------------------------------------------------*
+*&  Include           ZPM_R_UPDATE_CUSTOMTABLE_TOP
+*&---------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+* Author          : Venkata Vijay Bhushan Ala/Padmini Manickaraj
+* Creation Date   : 05-May-2014
+* Technical design: EAM-ALL Custom Program to Load Z tables
+* Transport number: DE3K912999
+* Description     : Program to Update Entries for any Custom Table.
+*                   Top Include
+*----------------------------------------------------------------------*
+* Modification Information
+*----------------------------------------------------------------------*
+* Date            : <DD-MMM-YYYY>
+* Author          : <Name of the programmer/Programmer user ID>
+* Change request  : <Change request number>
+* Transport number: <Transport number>
+* Description     : <Short description of changes>
+*----------------------------------------------------------------------*
+
+
+TYPE-POOLS: abap.
+
+*--- Declarations for dynamic data
+DATA :gt_data TYPE REF TO data,
+      gt_del_tab TYPE REF TO data,
+      gs_data TYPE REF TO data,
+
+      gt_data1 TYPE REF TO data.
+*     gs_data1 TYPE REF TO data.
+
+FIELD-SYMBOLS: <ft_data> TYPE STANDARD TABLE,
+               <ft_del_tab> TYPE STANDARD TABLE,
+               <fs_data> TYPE any,
+               <fs_del_tab> TYPE any,
+               <fs_data1> TYPE any.
+
+DATA: wa_data1 TYPE REF TO data.
+*CREATE DATA wa_data1." TYPE data.
+
+
+*--- Declarations for Result Count
+DATA: gv_success TYPE i,
+      gv_error   TYPE i.
+
+*--- Declaration for factory ALV
+DATA: gr_table TYPE REF TO cl_salv_table.
+
+TYPES: BEGIN OF ty_stream,
+        stream TYPE ztblworkstream,
+*        text   TYPE char40,
+      END OF ty_stream.
+
+DATA: it_stream TYPE STANDARD TABLE OF ty_stream,
+      wa_stream TYPE ty_stream.
+
+CONSTANTS: c_x TYPE c VALUE 'X',
+           c_e TYPE c VALUE 'E',
+           c_s  TYPE c VALUE 'S',
+           c_si TYPE ztblworkstream VALUE 'SIGNALS',
+           c_t  TYPE ztblworkstream VALUE 'TRACKS',
+           c_b  TYPE ztblworkstream VALUE 'STRUCTURES',
+           c_r  TYPE ztblworkstream VALUE 'ROADWAYS',
+           c_xs TYPE ztblworkstream VALUE 'XSTREAM',
+           c_c  TYPE c VALUE 'C',
+           c_y  TYPE c VALUE 'Y',
+           c_z  TYPE c VALUE 'Z',
+           c_i  TYPE c VALUE 'I',
+           c_tt TYPE c VALUE 'T',
+           c_tab TYPE abap_char1
+               VALUE cl_abap_char_utilities=>horizontal_tab.
+
+**--- start of Changes by C830446 for creation of change documents.
+
+DATA:  g_changedoc           TYPE cdobjectcl,
+         g_chgdocfm            TYPE rs38l_fnam,
+         g_cdhdr_upd_ind       TYPE cdhdr-change_ind,
+         g_objectid            TYPE  cdobjectv,
+         g_planchngnr          TYPE cdhdr-planchngnr,
+         g_plnndorreal         TYPE cdhdr-change_ind,
+         g_nochgpntrs          TYPE cdhdr-change_ind,
+         g_cdpos_upd_ind       TYPE cdhdr-change_ind.
+
+
+
+DATA: it_exp_param           TYPE STANDARD TABLE OF rsexp,
+      it_dokument            TYPE STANDARD TABLE OF funct,
+      it_exec_list           TYPE STANDARD TABLE OF rsexc,
+      it_imp_param           TYPE STANDARD TABLE OF rsimp,
+      it_chg_param           TYPE STANDARD TABLE OF rscha,
+      it_tab_param           TYPE STANDARD TABLE OF rstbl.
+
+FIELD-SYMBOLS: <fs_exp_param>     TYPE rsexp,
+               <fs_dokument>      TYPE funct,
+               <fs_exec_list>     TYPE rsexc,
+               <fs_imp_param>     TYPE rsimp,
+               <fs_chg_param>     TYPE rscha,
+               <fs_tab_param>     TYPE rstbl,
+               <fs_data_any>      TYPE any.
+
+DATA: param_tab   TYPE abap_func_parmbind_tab,
+      param_line  TYPE abap_func_parmbind.
+
+TYPES: BEGIN OF t_icdtxt_ztable_text.
+        INCLUDE STRUCTURE cdtxt.
+TYPES: END OF t_icdtxt_ztable_text.
+
+DATA: icdtxt_ztable_text    TYPE STANDARD TABLE OF t_icdtxt_ztable_text,
+      wa_icdtxt_ztable_text TYPE t_icdtxt_ztable_text.
+
+CONSTANTS: c_space(1) TYPE c VALUE ' '.
+
+**--- start of Changes by C830446 for creation of change documents.
+*-Start of changes C830803
+DATA : lv_count TYPE i.
+CLEAR: lv_count.
