@@ -1,0 +1,126 @@
+*&---------------------------------------------------------------------*
+*&  Include           ZPM_R_UPDATE_CUSTOMTABLE_SEL
+*&---------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+* Author          : Venkata Vijay Bhushan Ala/Padmini Manickaraj
+* Creation Date   : 05-May-2014
+* Technical Design: EAM-ALL Custom Program to Load Z tables
+* Transaction Code: ZPMUPLOAD
+* Transport number: DE3K912999
+* Description     : Program to Update Entries for any Custom Table.
+*                   Include for Selection Screen.
+*----------------------------------------------------------------------*
+* Modification Information
+*----------------------------------------------------------------------*
+* Date            : <DD-MMM-YYYY>
+* Author          : <Name of the programmer/Programmer user ID>
+* Change request  : <Change request number>
+* Transport number: <Transport number>
+* Description     : <Short description of changes>
+*----------------------------------------------------------------------*
+
+DATA : name  TYPE vrm_id,
+       list  TYPE vrm_values,
+       value LIKE LINE OF list.
+
+SELECTION-SCREEN BEGIN OF BLOCK blk1 WITH FRAME TITLE text-001.
+
+PARAMETERS: p_init RADIOBUTTON GROUP rad1 USER-COMMAND uc DEFAULT 'X'.
+SELECTION-SCREEN COMMENT /2(79) TEXT-004 MODIF ID SC1.
+
+SELECTION-SCREEN SKIP.
+
+PARAMETERS: p_delta RADIOBUTTON GROUP rad1.
+SELECTION-SCREEN COMMENT /2(79) TEXT-005 MODIF ID SC1.
+
+SELECTION-SCREEN SKIP.
+
+PARAMETERS: p_delete RADIOBUTTON GROUP rad1.
+SELECTION-SCREEN COMMENT /2(79) TEXT-021 MODIF ID SC1.
+
+SELECTION-SCREEN SKIP.
+
+PARAMETERS: p_dwnlod RADIOBUTTON GROUP rad1.
+SELECTION-SCREEN COMMENT /2(79) TEXT-006 MODIF ID SC1.
+
+
+
+SELECTION-SCREEN END OF BLOCK blk1.
+
+SELECTION-SCREEN BEGIN OF BLOCK blk2 WITH FRAME TITLE text-002.
+
+PARAMETERS: p_stream TYPE zpm_table_upload-workstream.
+PARAMETERS: p_table TYPE dd02l-tabname.
+PARAMETERS: p_ftyp AS LISTBOX VISIBLE LENGTH 8 USER-COMMAND uc2 MODIF ID m1.
+PARAMETERS: p_file TYPE rlgrap-filename MODIF ID m1.
+
+SELECTION-SCREEN END OF BLOCK blk2.
+
+INITIALIZATION.
+
+*- Auth Check
+  PERFORM auth_check USING ' '.
+
+
+AT SELECTION-SCREEN OUTPUT.
+
+*- Assign Drop down values for File Types
+*- This allows user to upload different file types like
+*  Excel, CSV, Tab delimited
+
+  CLEAR list.
+
+  name = 'P_FTYP'.
+
+  value-key = 'E'.
+  value-text = 'EXCEL'.
+  APPEND value TO list.
+
+  value-key = 'C'.
+  value-text = 'CSV'.
+  APPEND value TO list.
+
+  value-key = 'T'.
+  value-text = 'TAB'.
+  APPEND value TO list.
+
+  CALL FUNCTION 'VRM_SET_VALUES'
+    EXPORTING
+      id     = name
+      values = list.
+
+
+  "set initial value
+  IF p_ftyp IS INITIAL.
+    READ TABLE list INTO value INDEX 1.
+    p_ftyp = value-key.
+  ENDIF.
+
+PERFORM enable_disable.
+
+AT SELECTION-SCREEN.
+
+  IF sy-ucomm EQ 'ONLI'.
+
+* perform Auth Check on the selected table
+  PERFORM auth_check USING p_table.
+
+    PERFORM validate_screen_fields.
+    PERFORM validate_table.
+    PERFORM validate_file.
+    PERFORM pop_up_confirm.
+
+  ENDIF.
+
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_stream.
+*  F4 for streams
+  PERFORM f4_for_stream.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
+* F4 for file path
+  PERFORM f4_for_pser_file_fpath.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_table.
+* F4 for file path
+  PERFORM f4_for_table.
