@@ -1,0 +1,1319 @@
+*&---------------------------------------------------------------------*
+*&  Include           ZPM_R_UPDATE_CUSTOMTABLE_F01
+*&---------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+* Author          : Venkata Vijay Bhushan Ala(C829058)/Padmini Manickaraj(C828743)
+* Creation Date   : 05-May-2014
+* Technical Design:EAM-ALL Custom Program to Load Z tables
+* Transaction Code: ZPMUPLOAD
+* Transport number: DE3K912999
+* Description     : Program to Update Entries for any Custom Table.
+*                   Include for Subroutines
+*----------------------------------------------------------------------*
+* Modification Information
+*----------------------------------------------------------------------*
+* Date            : 29-Jul-2014
+* Author          : Swetha Srujitha Choundraju/C830446
+* Change request  : 8000006596
+* Transport number: DE3K913528
+* Description     : To create the change documents on the custom tables
+*                   for which the custom change document object exists.
+*----------------------------------------------------------------------*
+* Date            : 29-Oct-2014
+* Author          : Satya Sireesha Kolluri/C830803
+* Change request  : 8000008012
+* Transport number: DE3K915801
+* Description     : To enable the code for Conversion Routines if exist
+*                   in any of the table fields.
+*----------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+* Date            : 10th-June-2015
+* Author          : C836062(Tejas Deshpande)
+* Change request  : <Change request number>
+* Transport number: DE3K920944
+* Description     : modification to optimize program for HANA migration
+*----------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+* Date            : 19th-March-2020
+* Author          : C848448
+* Change request  : 8000037062
+* Transport number: DE3K979047
+* Description     : fix for converting work area into char90
+*----------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*&      Form  F4_FOR_PSER_FILE_FPATH
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f4_for_pser_file_fpath .
+
+* Local declarations
+  DATA: lt_filetable TYPE filetable,
+        wa_file      LIKE LINE OF lt_filetable,
+        l_fullpath   TYPE string,
+        l_rc         TYPE i.
+
+*F4 Help for path
+  CALL METHOD cl_gui_frontend_services=>file_open_dialog
+    CHANGING
+      file_table = lt_filetable
+      rc         = l_rc.
+
+  IF sy-subrc NE 0.
+
+    MESSAGE ID sy-msgid
+      TYPE sy-msgty
+      NUMBER sy-msgno
+      WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+
+  ENDIF.
+*Transferring file name
+  READ TABLE lt_filetable
+   INTO wa_file
+   INDEX 1.
+
+  l_fullpath = wa_file-filename.
+
+  p_file = l_fullpath.
+
+ENDFORM.                    " F4_FOR_PSER_FILE_FPATH
+*&---------------------------------------------------------------------*
+*&      Form  AUTH_CHECK
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM auth_check USING l_table.
+
+*- Form to check Authorization for TCode
+  CONSTANTS: lc_tcode TYPE sy-tcode VALUE 'ZPMUPLOAD'.
+
+
+  DATA: l_tcode TYPE sy-tcode,
+        l_param TYPE tcdparam.
+
+  IF l_table IS NOT INITIAL.
+* Find the TCode for the selected table in the selection screen
+
+*- Populate the param value
+    CONCATENATE '%SM30%' l_table '%' INTO l_param.
+
+    SELECT SINGLE tcode INTO l_tcode FROM tstcp
+      WHERE param LIKE l_param.
+    IF sy-subrc EQ 0.
+*        Maintenance TCode exists
+*        Check if the user has access to this maintenance TCode for the specific table
+      AUTHORITY-CHECK OBJECT 'S_TCODE'
+      ID 'TCD'
+      FIELD l_tcode.
+*- No Authorization to TCode & - ZPM_ALL (032)
+      IF sy-subrc NE 0.
+        MESSAGE s032 WITH l_tcode DISPLAY LIKE c_e.
+        LEAVE TO LIST-PROCESSING.
+      ENDIF.
+
+    ENDIF.
+
+  ELSE.
+*    Initial TCode check call.
+*    Check if the user has access to this transaction
+    AUTHORITY-CHECK OBJECT 'S_TCODE'
+    ID 'TCD'
+    FIELD lc_tcode.
+
+*- No Authorization to TCode & - ZPM_ALL (032)
+    IF sy-subrc NE 0.
+      MESSAGE s032 WITH lc_tcode DISPLAY LIKE c_e.
+      LEAVE PROGRAM.
+    ENDIF.
+
+  ENDIF.
+
+ENDFORM.                    " AUTH_CHECK
+*&---------------------------------------------------------------------*
+*&      Form  main_perform
+*&---------------------------------------------------------------------*
+*       Convert and Upload file data into custom tables
+*----------------------------------------------------------------------*
+FORM main_perform .
+
+
+* Create dynamic internal table
+  CREATE DATA gt_data TYPE TABLE OF (p_table).
+
+
+
+* Create dynamic work area
+  CREATE DATA gs_data TYPE (p_table).
+*  ASSIGN gs_data->* TO <fs_data>.
+  ASSIGN gs_data->* TO <fs_data1>.
+
+  IF p_dwnlod EQ c_x.
+
+    ASSIGN gt_data->* TO <ft_data>.
+    PERFORM f_data_downlod.
+
+  ELSE.
+
+*Create the custom field catalog
+    PERFORM f_custom_fieldcatalog.
+
+*- Get File and convert file data to internal table data
+*  based on file type
+    PERFORM f_convert_file_data.
+
+* Upload data to database table
+    PERFORM f_upload_table.
+
+  ENDIF.
+
+ENDFORM.                    " UPLOAD_DATA
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_TABLE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM validate_table .
+
+  DATA: lv_tabname   TYPE zpm_table_upload-table_name,
+        l_workstream TYPE ztblworkstream.
+
+  IF p_table IS INITIAL.
+
+    MESSAGE text-011 TYPE c_e.
+
+
+  ELSE.
+
+*--- Upload only Tables in customer namespace
+    IF p_table+0(1) NE c_z AND p_table+0(1) NE c_y.
+      MESSAGE text-012 TYPE c_e.
+    ENDIF.
+
+
+    CLEAR: lv_tabname.
+
+    l_workstream = p_stream.
+* Only transparent tables can be uploaded
+    SELECT SINGLE table_name
+    FROM zpm_table_upload
+    INTO lv_tabname
+    WHERE workstream = l_workstream AND
+          table_name = p_table.
+    IF sy-subrc NE 0.
+      MESSAGE text-013 TYPE c_e.
+    ENDIF.
+
+  ENDIF.
+ENDFORM.                    " VALIDATE_TABLE
+*&---------------------------------------------------------------------*
+*&      Form  F_CONVERT_EXCEL
+*&---------------------------------------------------------------------*
+*       Get Excel data in internal table
+*----------------------------------------------------------------------*
+FORM f_convert_excel .
+
+  DATA lt_raw_data  TYPE truxs_t_text_data.
+
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+*     I_FIELD_SEPERATOR    =
+      i_line_header        = c_x
+      i_tab_raw_data       = lt_raw_data
+      i_filename           = p_file
+    TABLES
+      i_tab_converted_data = <ft_data>
+    EXCEPTIONS
+      conversion_failed    = 1
+      OTHERS               = 2.
+
+  IF sy-subrc <> 0.
+
+    MESSAGE ID sy-msgid TYPE c_s NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4 DISPLAY LIKE sy-msgty .
+
+    LEAVE LIST-PROCESSING.
+
+  ENDIF.
+
+
+ENDFORM.                    " F_CONVERT_EXCEL
+*&---------------------------------------------------------------------*
+*&      Form  F_UPLOAD_TABLE
+*&---------------------------------------------------------------------*
+*       Upload data to database table
+*----------------------------------------------------------------------*
+FORM f_upload_table .
+
+* Start of changes by C830446
+*--- Check if the table to be uploaded has a change document object enabled.
+*  If YES, the FM to create change documents has to be called so that the change documents are created
+*  If NO, Upload the program with out creating the change documents
+
+  CONSTANTS: lc_n(1) TYPE c VALUE 'N',
+             lc_i(1) TYPE c VALUE 'I',
+             lc_d(1) TYPE c VALUE 'D'.
+
+* Select the change document object for the table
+  SELECT SINGLE object
+          FROM tcdob
+    INTO g_changedoc
+    WHERE tabname EQ p_table.
+
+* Check if there is a existing change document object for this table
+  IF g_changedoc IS NOT INITIAL.
+
+    CREATE DATA gt_del_tab TYPE TABLE OF (p_table).
+    ASSIGN gt_del_tab->* TO <ft_del_tab>.
+
+    CONCATENATE g_changedoc '_WRITE_DOCUMENT' INTO g_chgdocfm.
+    IF g_chgdocfm IS NOT INITIAL.
+
+* Call this function module and it will return all the parameters  of the
+* function module that is passed
+      CALL FUNCTION 'FUNCTION_IMPORT_DOKU'
+        EXPORTING
+          funcname           = g_chgdocfm
+          language           = sy-langu
+        TABLES
+          dokumentation      = it_dokument
+          exception_list     = it_exec_list
+          export_parameter   = it_exp_param
+          import_parameter   = it_imp_param
+          changing_parameter = it_chg_param
+          tables_parameter   = it_tab_param
+        EXCEPTIONS
+          error_message      = 1
+          function_not_found = 2
+          invalid_name       = 3
+          OTHERS             = 4.
+    ENDIF.
+  ENDIF.
+
+* End of changes by C830446
+
+  IF <ft_data> IS NOT INITIAL.
+
+    IF p_init EQ c_x.
+
+      IF <ft_del_tab> IS ASSIGNED.
+
+        SELECT *
+          FROM (p_table)
+          INTO TABLE <ft_del_tab>.
+
+      ENDIF.
+*--> BEGIN OF MODIFICATION A2H BY Tejas S. Deshpande / C836062 on 10th June 2015
+      DELETE FROM (p_table). "#EC CI_NOWHERE.     " supressing the error shown by ATC check
+*--> END OF MODIFICATION A2H BY Tejas S. Deshpande / C836062 on 10th June 2015
+
+      IF sy-subrc = 0 AND g_changedoc IS NOT INITIAL.
+
+        LOOP AT <ft_del_tab> ASSIGNING <fs_del_tab>.
+
+          CLEAR: g_cdhdr_upd_ind, g_cdpos_upd_ind.
+          MOVE-CORRESPONDING <fs_del_tab> TO <fs_data1>.
+
+          g_cdhdr_upd_ind = lc_d.
+          g_cdpos_upd_ind = lc_d.
+
+* Call the perform to create the change document
+          PERFORM create_change_document.
+
+        ENDLOOP.
+      ENDIF.
+
+      SET UPDATE TASK LOCAL.   " Switch to local update
+
+      LOOP AT <ft_data> ASSIGNING <fs_data>.
+
+        CLEAR: g_cdhdr_upd_ind, g_cdpos_upd_ind.
+
+*        MOVE-CORRESPONDING <fs_data> TO <fs_data1>. "commented C830803 TR DE3K915801
+*-Start of changes TR DE3K915801/ C830803
+        PERFORM convert_data.
+*-End of changes TR DE3K915801/ C830803
+        MODIFY (p_table) FROM <fs_data1>.
+        IF sy-subrc = 0.
+
+* Start of changes by C830446
+          IF g_changedoc IS NOT INITIAL.
+            g_cdhdr_upd_ind = lc_i.
+            g_cdpos_upd_ind = lc_i.
+
+* Call the perform to create the change document
+            PERFORM create_change_document.
+          ENDIF.
+* End of changes by C830446
+          gv_success = gv_success + 1.
+        ELSE.
+          DELETE <ft_data> INDEX sy-tabix.
+          gv_error = gv_error + 1.
+        ENDIF.
+
+      ENDLOOP.
+
+    ELSEIF p_delta EQ c_x.
+
+      SET UPDATE TASK LOCAL.   " Switch to local update
+
+      LOOP AT <ft_data> ASSIGNING <fs_data>.
+
+        CLEAR: g_cdhdr_upd_ind, g_cdpos_upd_ind.
+
+*        MOVE-CORRESPONDING <fs_data> TO <fs_data1>. "commented C830803 TR DE3K915801
+*-Start of changes TR DE3K915801/ C830803
+        PERFORM convert_data.
+*-End of changes TR DE3K915801/ C830803
+        MODIFY (p_table) FROM <fs_data1>.
+        IF sy-subrc = 0.
+* Start of changes by C830446
+          IF g_changedoc IS NOT INITIAL.
+            g_cdhdr_upd_ind = lc_i.
+            g_cdpos_upd_ind = lc_i.
+
+* Call the perform to create the change document
+            PERFORM create_change_document.
+          ENDIF.
+* End of changes by C830446
+          gv_success = gv_success + 1.
+        ELSE.
+          DELETE <ft_data> INDEX sy-tabix.
+          gv_error = gv_error + 1.
+        ENDIF.
+
+      ENDLOOP.
+
+    ELSEIF p_delete EQ c_x.
+
+      SET UPDATE TASK LOCAL.   " Switch to local update
+
+      LOOP AT <ft_data> ASSIGNING <fs_data>.
+
+        CLEAR: g_cdhdr_upd_ind, g_cdpos_upd_ind.
+
+*        MOVE-CORRESPONDING <fs_data> TO <fs_data1>. "commented C830803 TR DE3K915801
+*-Start of changes TR DE3K915801/ C830803
+        PERFORM convert_data.
+*-End of changes TR DE3K915801/ C830803
+
+        DELETE (p_table) FROM <fs_data1>.
+
+        IF sy-subrc = 0.
+* Start of changes by C830446
+          IF g_changedoc IS NOT INITIAL.
+            g_cdhdr_upd_ind = lc_d.
+            g_cdpos_upd_ind = lc_d.
+
+* Call the perform to create the change document
+            PERFORM create_change_document.
+          ENDIF.
+* End of changes by C830446
+          gv_success = gv_success + 1.
+        ELSE.
+          DELETE <ft_data> INDEX sy-tabix.
+          gv_error = gv_error + 1.
+        ENDIF.
+
+      ENDLOOP.
+    ENDIF.
+  ELSE.
+
+    MESSAGE text-023 TYPE c_s DISPLAY LIKE c_e.
+
+    LEAVE LIST-PROCESSING.
+
+  ENDIF.
+
+ENDFORM.                    " F_UPLOAD_TABLE
+*&---------------------------------------------------------------------*
+*&      Form  F_SHOW_RESULT
+*&---------------------------------------------------------------------*
+*       Create Factory ALV and display result
+*----------------------------------------------------------------------**
+FORM f_show_result .
+
+  DATA: lc_msg TYPE REF TO cx_salv_msg.
+*--- Create Instance
+  TRY.
+      CALL METHOD cl_salv_table=>factory
+        IMPORTING
+          r_salv_table = gr_table
+        CHANGING
+          t_table      = <ft_data>. " Only entries which are updated successfully
+
+    CATCH cx_salv_msg INTO lc_msg .
+
+  ENDTRY.
+*--- Display ALV \Output
+  gr_table->display( ).
+
+  WRITE: text-009,gv_success.
+  WRITE: text-010, gv_error.
+
+ENDFORM.                    " F_SHOW_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  F4_FOR_TABLE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f4_for_table.
+
+
+
+  DATA: lt_dynprofileds TYPE STANDARD TABLE OF dynpread,
+        ls_dynprofileds TYPE dynpread.
+
+  ls_dynprofileds-fieldname = 'P_STREAM'.
+  APPEND ls_dynprofileds TO lt_dynprofileds .
+
+  CALL FUNCTION 'DYNP_VALUES_READ'
+    EXPORTING
+      dyname               = sy-repid
+      dynumb               = sy-dynnr
+    TABLES
+      dynpfields           = lt_dynprofileds
+    EXCEPTIONS
+      invalid_abapworkarea = 1
+      invalid_dynprofield  = 2
+      invalid_dynproname   = 3
+      invalid_dynpronummer = 4
+      invalid_request      = 5
+      no_fielddescription  = 6
+      invalid_parameter    = 7
+      undefind_error       = 8
+      double_conversion    = 9
+      stepl_not_found      = 10
+      OTHERS               = 11.
+
+  IF sy-subrc <> 0.
+
+    MESSAGE ID sy-msgid TYPE c_s NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4 DISPLAY LIKE sy-msgty .
+
+  ENDIF.
+
+  READ TABLE  lt_dynprofileds  INTO ls_dynprofileds WITH KEY fieldname = 'P_STREAM'.
+
+  IF sy-subrc EQ 0.
+    p_stream = ls_dynprofileds-fieldvalue.
+
+  ENDIF.
+
+  IF p_stream IS INITIAL.
+
+    MESSAGE text-022 TYPE 'I'.
+
+  ENDIF.
+
+  DATA: lt_return    TYPE STANDARD TABLE OF ddshretval,
+        l_workstream TYPE ztblworkstream.
+
+  TYPES: BEGIN OF ty_tab,
+           table_name TYPE tabname16,
+         END OF ty_tab.
+
+  DATA: lit_tab TYPE STANDARD TABLE OF ty_tab.
+
+  l_workstream = p_stream.
+
+  SELECT table_name
+     FROM zpm_table_upload
+     INTO TABLE lit_tab
+    WHERE workstream = l_workstream.
+
+  REFRESH : lt_return[].
+
+* F4 Help for the "ZZSTATUS_REQ" Field on the Screen
+  CALL FUNCTION 'F4IF_INT_TABLE_VALUE_REQUEST'
+    EXPORTING
+      retfield    = 'TABLE_NAME'
+      dynpprog    = sy-repid
+      dynpnr      = sy-dynnr
+      dynprofield = 'ZPM_TABLE_UPLOAD-TABLE_NAME'
+      value_org   = c_s
+*     multiple_choice = ' '
+    TABLES
+      value_tab   = lit_tab
+      return_tab  = lt_return.
+
+ENDFORM.                    " F4_FOR_TABLE
+*&---------------------------------------------------------------------*
+*&      Form  F_CONVERT_FILE_DATA
+*&---------------------------------------------------------------------*
+*  Get File and convert file data to internal table data
+*  based on file type
+*----------------------------------------------------------------------*
+FORM f_convert_file_data .
+
+*- Perform to convert file data into internal table data based on file type
+
+  CASE p_ftyp.
+    WHEN c_e.
+* Get Excel data in internal table
+      PERFORM f_convert_excel.
+
+    WHEN c_c.
+* Get CSV file data converted to internal table
+      PERFORM f_convert_csv.
+
+    WHEN c_tt.
+* Get TAB delimited file data converted to internal table
+      PERFORM f_convert_tab.
+
+
+  ENDCASE.
+
+
+ENDFORM.                    " F_CONVERT_FILE_DATA
+*&---------------------------------------------------------------------*
+*&      Form  F_CONVERT_CSV
+*&---------------------------------------------------------------------*
+*       Get CSV file data converted to internal table
+*----------------------------------------------------------------------*
+FORM f_convert_csv .
+
+  DATA: lt_raw_data TYPE truxs_t_text_data.
+
+*Begin of DE3K915801
+
+*  CALL FUNCTION 'TEXT_CONVERT_CSV_TO_SAP'
+*    EXPORTING
+**     I_FIELD_SEPERATOR    = ';'
+*      i_line_header        = c_x
+*      i_tab_raw_data       = lt_raw_data
+*      i_filename           = p_file
+*    TABLES
+*      i_tab_converted_data = <ft_data>
+*    EXCEPTIONS
+*      conversion_failed    = 1
+*      OTHERS               = 2.
+*  IF sy-subrc <> 0.
+*
+*    MESSAGE ID sy-msgid TYPE c_s NUMBER sy-msgno
+*        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4 DISPLAY LIKE sy-msgty .
+*
+*    LEAVE LIST-PROCESSING.
+*
+*  ENDIF.
+
+
+  CALL FUNCTION 'GUI_UPLOAD'
+    EXPORTING
+      filename            = p_file
+      filetype            = 'ASC'
+      has_field_separator = c_x
+    TABLES
+      data_tab            = lt_raw_data.
+
+  CALL FUNCTION 'TEXT_CONVERT_TEX_TO_SAP'
+    EXPORTING
+      i_field_seperator    = ','
+      i_line_header        = c_x
+      i_tab_raw_data       = lt_raw_data
+    TABLES
+      i_tab_converted_data = <ft_data>
+    EXCEPTIONS
+      conversion_failed    = 1
+      OTHERS               = 2.
+
+
+  IF sy-subrc <> 0.
+
+    MESSAGE ID sy-msgid TYPE 'S' NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4 DISPLAY LIKE sy-msgty .
+
+    LEAVE LIST-PROCESSING.
+
+  ENDIF.
+
+
+
+*End of DE3K915801
+
+
+ENDFORM.                    " F_CONVERT_CSV
+*&---------------------------------------------------------------------*
+*&      Form  F_CONVERT_TAB
+*&---------------------------------------------------------------------*
+*       Get TAB delimited file data converted to internal table
+*----------------------------------------------------------------------*
+FORM f_convert_tab .
+
+  DATA: l_file TYPE string.
+
+  l_file = p_file.
+
+  CALL FUNCTION 'GUI_UPLOAD'
+    EXPORTING
+      filename                = l_file
+      filetype                = 'ASC'
+      has_field_separator     = c_x
+    TABLES
+      data_tab                = <ft_data>
+    EXCEPTIONS
+      file_open_error         = 1
+      file_read_error         = 2
+      no_batch                = 3
+      gui_refuse_filetransfer = 4
+      invalid_type            = 5
+      no_authority            = 6
+      unknown_error           = 7
+      bad_data_format         = 8
+      header_not_allowed      = 9
+      separator_not_allowed   = 10
+      header_too_long         = 11
+      unknown_dp_error        = 12
+      access_denied           = 13
+      dp_out_of_memory        = 14
+      disk_full               = 15
+      dp_timeout              = 16
+      OTHERS                  = 17.
+
+
+
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE c_s NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4 DISPLAY LIKE sy-msgty .
+
+    LEAVE LIST-PROCESSING.
+
+  ELSE.
+
+    DELETE <ft_data> INDEX 1.
+
+  ENDIF.
+
+
+
+ENDFORM.                    " F_CONVERT_TAB
+*&---------------------------------------------------------------------*
+*&      Form  F_CUSTOM_FIELDCATALOG
+*&---------------------------------------------------------------------*
+*       Create the custom field catalog
+*----------------------------------------------------------------------*
+FORM f_custom_fieldcatalog .
+
+  DATA : it_fieldcatalog TYPE lvc_t_fcat,
+         wa_fieldcatalog TYPE lvc_s_fcat.
+
+*  Get fieldcatalog of first table.
+  REFRESH it_fieldcatalog[].
+  CLEAR : wa_fieldcatalog.
+
+  CALL FUNCTION 'LVC_FIELDCATALOG_MERGE'
+    EXPORTING
+      i_structure_name   = p_table
+      i_bypassing_buffer = c_x
+    CHANGING
+      ct_fieldcat        = it_fieldcatalog.
+
+
+  READ TABLE it_fieldcatalog INTO wa_fieldcatalog
+                        WITH KEY fieldname = 'MANDT'.
+
+  IF sy-subrc EQ 0.
+* Remove the MANDT (client) field from fieldcatalog
+    DELETE it_fieldcatalog INDEX 1.
+
+  ENDIF.
+
+* Create a dynamic internal table for p_table.
+  CALL METHOD cl_alv_table_create=>create_dynamic_table
+    EXPORTING
+      it_fieldcatalog = it_fieldcatalog
+    IMPORTING
+      ep_table        = gt_data1.
+
+  ASSIGN gt_data1->* TO <ft_data>.
+
+
+ENDFORM.                    " F_CUSTOM_FIELDCATALOG
+*&---------------------------------------------------------------------*
+*&      Form  F4_FOR_STREAM
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f4_for_stream .
+
+  REFRESH: it_stream[].
+*--> BEGIN OF MODIFICATION A2H BY Tejas S. Deshpande / C836062 on 10th June 2015
+  SELECT workstream "#EC CI_NOWHERE.     " supressing the error shown by ATC check
+     FROM zpm_table_upload
+    INTO TABLE it_stream.
+*--> END OF MODIFICATION A2H BY Tejas S. Deshpande / C836062 on 10th June 2015
+
+*--> BEGIN OF MODIFICATION A2H BY Tejas S. Deshpande / C836062 on 10th June 2015
+  SORT it_stream BY stream.
+*--> END OF MODIFICATION A2H BY Tejas S. Deshpande / C836062 on 10th June 2015
+  DELETE ADJACENT DUPLICATES FROM it_stream COMPARING stream.
+
+  CALL FUNCTION 'F4IF_INT_TABLE_VALUE_REQUEST'
+    EXPORTING
+      retfield    = 'WORKSTREAM'
+      dynpprog    = sy-cprog
+      dynpnr      = sy-dynnr
+      dynprofield = 'ZPM_TABLE_UPLOAD-WORKSTREAM'
+      value_org   = c_s
+    TABLES
+      value_tab   = it_stream.
+
+ENDFORM.                    " F4_FOR_STREAM
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_SCREEN_FIELDS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM validate_screen_fields .
+
+  IF p_stream IS INITIAL.
+
+    MESSAGE text-020 TYPE c_e.
+
+  ELSE.
+
+    IF p_stream NE c_t AND p_stream NE c_si AND p_stream NE c_b AND p_stream NE c_r  AND p_stream NE c_xs .
+
+      MESSAGE text-019 TYPE c_e.
+
+    ENDIF.
+
+  ENDIF.
+
+ENDFORM.                    " VALIDATE_SCREEN_FIELDS
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_FILE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM validate_file .
+
+  IF p_file IS INITIAL AND p_dwnlod NE c_x.
+
+    CASE p_ftyp.
+
+      WHEN c_e.
+        MESSAGE text-018 TYPE c_e.
+
+      WHEN c_c.
+        MESSAGE text-017 TYPE c_e.
+
+      WHEN c_t.
+        MESSAGE text-016 TYPE c_e.
+
+    ENDCASE.
+
+  ENDIF.
+
+ENDFORM.                    " VALIDATE_FILE
+*&---------------------------------------------------------------------*
+*&      Form  POP_UP_CONFIRM
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM pop_up_confirm .
+
+  IF p_init EQ c_x.
+
+    DATA: g_answer TYPE char1.
+
+    CALL FUNCTION 'POPUP_TO_CONFIRM'
+      EXPORTING
+        titlebar              = text-008
+        text_question         = text-003
+        text_button_1         = 'Yes'
+        text_button_2         = 'No'
+        default_button        = '1'
+        display_cancel_button = c_x
+      IMPORTING
+        answer                = g_answer.
+
+    CASE g_answer.
+
+      WHEN '2' OR 'A'.
+        SET SCREEN 0.
+        LEAVE TO SCREEN 1000.
+    ENDCASE.
+
+  ENDIF.
+
+ENDFORM.                    " POP_UP_CONFIRM
+*&---------------------------------------------------------------------*
+*&      Form  F_DATA_DOWNLOD
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f_data_downlod .
+
+  DATA:  file      TYPE string,
+         path      TYPE string,
+         file_path TYPE string.
+
+  SELECT *
+    FROM (p_table)
+    INTO TABLE <ft_data>.
+
+  IF sy-subrc EQ 0.
+
+    CALL METHOD cl_gui_frontend_services=>file_save_dialog
+      CHANGING
+        filename = file
+        path     = path
+        fullpath = file_path.
+
+    CHECK NOT file_path IS INITIAL.
+
+    CALL METHOD cl_gui_frontend_services=>gui_download
+      EXPORTING
+        filename              = file_path
+        write_field_separator = c_x
+      CHANGING
+        data_tab              = <ft_data>.
+
+*Download table enries to excel sheet
+    WRITE:/ text-015.
+
+  ELSE.
+
+    MESSAGE text-014 TYPE c_s DISPLAY LIKE c_i.
+
+    LEAVE LIST-PROCESSING.
+
+  ENDIF.
+
+ENDFORM.                    " F_DATA_DOWNLOD
+*&---------------------------------------------------------------------*
+*&      Form  ENABLE_DISABLE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM enable_disable .
+
+  LOOP AT SCREEN.
+
+    IF p_dwnlod EQ c_x.
+
+      IF  screen-group1 = 'M1'.
+
+        screen-active = '0'.
+
+        MODIFY SCREEN.
+
+      ENDIF.
+*Button selection in presentation server
+    ELSEIF p_dwnlod IS INITIAL.
+
+      IF  screen-group1 = 'M1'.
+
+        screen-active = '1'.
+
+        MODIFY SCREEN.
+
+      ENDIF.
+
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.                    " ENABLE_DISABLE
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_CHANGE_DOCUMENT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM create_change_document .
+
+  CONSTANTS: lc_objectid(8)    TYPE c        VALUE 'OBJECTID',
+             lc_tcode(5)       TYPE c        VALUE 'TCODE',
+             lc_utime(5)       TYPE c        VALUE 'UTIME',
+             lc_udate(5)       TYPE c        VALUE 'UDATE',
+             lc_usrname(8)     TYPE c        VALUE 'USERNAME',
+             lc_plchgnum(21)   TYPE c        VALUE 'PLANNED_CHANGE_NUMBER',
+             lc_objchgind(23)  TYPE c        VALUE 'OBJECT_CHANGE_INDICATOR',
+             lc_plnorreal(23)  TYPE c        VALUE 'PLANNED_OR_REAL_CHANGES',
+             lc_nochgptrs(18)  TYPE c        VALUE 'NO_CHANGE_POINTERS',
+             lc_upd_icdtxt(11) TYPE c        VALUE 'UPD_ICDTXT_',
+             lc_new(3)         TYPE c        VALUE 'N_',
+             lc_old(3)         TYPE c        VALUE 'O_',
+             lc_upd_chgind(6)  TYPE c        VALUE 'UPD_Z',
+             lc_i(1)           TYPE c        VALUE 'I',
+             lc_d(1)           TYPE c        VALUE 'D',
+             lc_icdtxt(7)      TYPE c        VALUE 'ICDTXT_'.
+* start of change by c848448 3/19/2020 8000037062  DE3K979047
+  DATA: lv_temp_objId type c LENGTH 999.
+
+  IF <fs_data1> IS ASSIGNED.
+   CALL FUNCTION 'C147_WORKAREA_TO_CHARFIELD'
+    EXPORTING
+      i_workarea        = <fs_data1>
+    IMPORTING
+      E_CHARFIELD       = lv_temp_objId
+            .
+   move lv_temp_objId+0(90) to g_objectid.
+  ENDIF.
+* end of change by c848448 3/19/2020 8000037062  DE3K979047
+*  MOVE <fs_data1> TO g_objectid.   * commented by c848448 3/19/2020 8000037062  DE3K979047
+  GET REFERENCE OF <fs_data1> INTO wa_data1.
+
+  IF it_imp_param IS NOT INITIAL.
+    CLEAR: param_line.
+    REFRESH: param_tab[].
+    SORT it_imp_param BY parameter.
+
+    LOOP AT it_imp_param ASSIGNING <fs_imp_param>.
+
+      IF <fs_imp_param>-parameter EQ lc_objectid.
+
+        param_line-kind  = abap_func_exporting.
+        param_line-name  = <fs_imp_param>-parameter.
+        GET REFERENCE OF g_objectid INTO param_line-value.
+
+      ELSEIF <fs_imp_param>-parameter EQ lc_tcode.
+
+        param_line-kind  = abap_func_exporting.
+        param_line-name  = <fs_imp_param>-parameter.
+        GET REFERENCE OF sy-tcode INTO param_line-value.
+
+      ELSEIF <fs_imp_param>-parameter EQ lc_utime.
+
+        param_line-kind  = abap_func_exporting.
+        param_line-name  = <fs_imp_param>-parameter.
+        GET REFERENCE OF sy-uzeit INTO param_line-value.
+
+      ELSEIF <fs_imp_param>-parameter EQ lc_udate.
+
+        param_line-kind  = abap_func_exporting.
+        param_line-name  = <fs_imp_param>-parameter.
+        GET REFERENCE OF sy-datum INTO param_line-value.
+
+      ELSEIF <fs_imp_param>-parameter EQ lc_usrname.
+
+        param_line-kind  = abap_func_exporting.
+        param_line-name  = <fs_imp_param>-parameter.
+        GET REFERENCE OF sy-uname INTO param_line-value.
+
+      ELSEIF <fs_imp_param>-parameter EQ lc_plchgnum.
+
+        param_line-kind  = abap_func_exporting.
+        param_line-name  = <fs_imp_param>-parameter.
+        g_planchngnr = space.
+        GET REFERENCE OF g_planchngnr INTO param_line-value.
+
+      ELSEIF <fs_imp_param>-parameter EQ lc_objchgind.
+
+        param_line-kind  = abap_func_exporting.
+        param_line-name  = <fs_imp_param>-parameter.
+        GET REFERENCE OF g_cdhdr_upd_ind INTO param_line-value.
+
+      ELSEIF <fs_imp_param>-parameter EQ lc_plnorreal.
+
+        param_line-kind  = abap_func_exporting.
+        param_line-name  = <fs_imp_param>-parameter.
+        g_plnndorreal = space.
+        GET REFERENCE OF g_plnndorreal INTO param_line-value.
+
+      ELSEIF <fs_imp_param>-parameter EQ lc_nochgptrs.
+
+        param_line-kind  = abap_func_exporting.
+        param_line-name  = <fs_imp_param>-parameter.
+        g_nochgpntrs = space.
+        GET REFERENCE OF g_nochgpntrs INTO param_line-value.
+
+*      ELSEIF <fs_imp_param>-parameter CS lc_upd_icdtxt.
+*
+*        param_line-kind  = abap_func_exporting.
+*        param_line-name  = <fs_imp_param>-parameter.
+*        GET REFERENCE OF g_cdpos_upd_ind INTO param_line-value.
+
+      ELSEIF <fs_imp_param>-parameter CS lc_new.
+
+        IF g_cdhdr_upd_ind EQ lc_i.
+          param_line-kind  = abap_func_exporting.
+          param_line-name  = <fs_imp_param>-parameter.
+          param_line-value = wa_data1.
+        ENDIF.
+
+      ELSEIF <fs_imp_param>-parameter CS lc_old.
+
+        IF g_cdhdr_upd_ind EQ lc_d.
+          param_line-kind  = abap_func_exporting.
+          param_line-name  = <fs_imp_param>-parameter.
+          param_line-value = wa_data1.
+        ENDIF.
+
+      ELSEIF <fs_imp_param>-parameter CS lc_upd_chgind.
+
+        param_line-kind  = abap_func_exporting.
+        param_line-name  = <fs_imp_param>-parameter.
+        GET REFERENCE OF g_cdpos_upd_ind INTO param_line-value.
+
+      ENDIF.
+
+      IF param_line IS NOT INITIAL.
+        APPEND param_line TO param_tab.
+      ENDIF.
+      CLEAR param_line.
+
+    ENDLOOP.
+  ENDIF.
+  IF it_tab_param IS NOT INITIAL.
+    REFRESH icdtxt_ztable_text[].
+    LOOP AT it_tab_param ASSIGNING <fs_tab_param>.
+      IF <fs_tab_param>-parameter CS lc_icdtxt.
+
+        param_line-kind  = abap_func_tables.
+        param_line-name  = <fs_tab_param>-parameter.
+        APPEND INITIAL LINE TO icdtxt_ztable_text.
+        GET REFERENCE OF icdtxt_ztable_text INTO param_line-value.
+
+      ENDIF.
+      IF param_line IS NOT INITIAL.
+        APPEND param_line TO param_tab.
+      ENDIF.
+      CLEAR param_line.
+    ENDLOOP.
+  ENDIF.
+*              ENDIF.
+
+  IF param_tab IS NOT INITIAL.
+    CALL FUNCTION g_chgdocfm
+      PARAMETER-TABLE param_tab.
+  ENDIF.
+
+ENDFORM.                    " CREATE_CHANGE_DOCUMENT
+*&---------------------------------------------------------------------*
+*&      Form  AUTH_CHECK_TABLE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM auth_check_table .
+
+
+
+
+
+ENDFORM.                    " AUTH_CHECK_TABLE
+*&---------------------------------------------------------------------*
+*&      Form  CONVERT_DATA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_<FS_DATA>  text
+*      <--P_<FS_DATA1>  text
+*----------------------------------------------------------------------*
+FORM convert_data.
+
+  TYPES : BEGIN OF t_dd03l,
+            tabname   TYPE tabname,
+            fieldname TYPE fieldname,
+            rollname  TYPE rollname,
+          END OF t_dd03l,
+
+          BEGIN OF t_dd04l,
+            rollname TYPE rollname,
+            domname  TYPE domname,
+          END OF t_dd04l,
+
+          BEGIN OF t_dd01l,
+            domname  TYPE domname,
+            convexit TYPE convexit,
+          END OF t_dd01l,
+
+          BEGIN OF t_output,
+            fieldname TYPE fieldname,
+            newvalue  TYPE char255,
+          END OF t_output.
+
+  DATA: it_dd03l  TYPE STANDARD TABLE OF t_dd03l,
+        wa_dd03l  TYPE t_dd03l,
+        it_dd04l  TYPE STANDARD TABLE OF t_dd04l,
+        wa_dd04l  TYPE t_dd04l,
+        it_dd01l  TYPE STANDARD TABLE OF t_dd01l,
+        wa_dd01l  TYPE t_dd01l,
+        it_output TYPE STANDARD TABLE OF t_output,
+        wa_output TYPE t_output.
+
+  DATA: lv_exit_name TYPE string,
+        lr_data      TYPE REF TO data,
+        lx_root      TYPE REF TO cx_root.
+
+  DATA: lcl_table TYPE REF TO cl_abap_tabledescr,
+        lcl_struc TYPE REF TO cl_abap_structdescr,
+        it_fields TYPE abap_compdescr_tab,
+        wa_fields TYPE abap_compdescr,
+        wa_field  TYPE abap_compdescr.
+
+  DATA:lf_length TYPE i,
+       lf_mask   TYPE string.
+
+  FIELD-SYMBOLS: <fs_value> TYPE any,
+                 <fs_temp>  TYPE any,
+                 <fs_field> TYPE any.
+  CLEAR: lv_count.
+
+* Get the Table details
+  lcl_table ?= cl_abap_typedescr=>describe_by_data( <ft_data> ).
+* Get the table line type i.e., structure details
+  lcl_struc ?= lcl_table->get_table_line_type( ).
+* Get the components(fields) of the table line
+  it_fields = lcl_struc->components.
+
+*-Fetch data elements for fields
+*--> BEGIN OF MODIFICATION A2H BY Tejas S. Deshpande / C836062 on 10th June 2015
+  IF it_fields[] IS NOT INITIAL.
+    SELECT tabname fieldname rollname FROM dd03l INTO TABLE it_dd03l
+    FOR ALL ENTRIES IN it_fields
+    WHERE tabname   = p_table
+              AND fieldname = it_fields-name.
+  ENDIF.
+*--> END OF MODIFICATION A2H BY Tejas S. Deshpande / C836062 on 10th June 2015
+  IF it_dd03l IS NOT INITIAL.
+*-Fetch domain for data elements
+    SELECT rollname domname FROM dd04l INTO TABLE it_dd04l
+      FOR ALL ENTRIES IN it_dd03l
+             WHERE rollname = it_dd03l-rollname.
+    IF it_dd04l IS NOT INITIAL.
+*-Get the convert routine for the domains
+      SELECT domname convexit FROM dd01l INTO TABLE it_dd01l
+        FOR ALL ENTRIES IN it_dd04l
+          WHERE domname = it_dd04l-domname.
+    ENDIF.
+  ENDIF.
+*-track the column name/value from it_fields and <fs_data>
+  LOOP AT it_fields INTO wa_fields.
+    lv_count = lv_count + 1.
+    READ TABLE it_fields INTO wa_field INDEX lv_count.
+    ASSIGN COMPONENT lv_count OF STRUCTURE <fs_data> TO <fs_temp>.
+
+    READ TABLE it_dd03l INTO wa_dd03l WITH KEY fieldname = wa_field-name.
+    READ TABLE it_dd04l INTO wa_dd04l WITH KEY rollname = wa_dd03l-rollname.
+    READ TABLE it_dd01l INTO wa_dd01l WITH KEY domname = wa_dd04l-domname.
+    IF wa_dd01l-convexit IS NOT INITIAL.
+      TRY.
+          CREATE DATA lr_data TYPE (wa_dd03l-rollname).
+        CATCH cx_sy_create_data_error INTO lx_root.
+          EXIT.
+      ENDTRY.
+      " dereferencing
+      ASSIGN lr_data->* TO <fs_value>.
+      IF sy-subrc = 0.
+
+        CONCATENATE 'CONVERSION_EXIT_' wa_dd01l-convexit '_INPUT' INTO lv_exit_name.
+
+        IF sy-subrc = 0.
+
+          CALL FUNCTION lv_exit_name
+            EXPORTING
+              input  = <fs_temp>
+            IMPORTING
+              output = <fs_value>.
+
+          ASSIGN COMPONENT wa_field-name OF STRUCTURE <fs_data1> TO <fs_field>.
+          IF <fs_field> IS ASSIGNED.
+            <fs_field> = <fs_value>.
+          ENDIF.
+        ENDIF.
+*      ENDDO.
+      ENDIF.
+    ELSE.
+      ASSIGN COMPONENT wa_field-name OF STRUCTURE <fs_data1> TO <fs_field>.
+      IF <fs_field> IS ASSIGNED.
+        <fs_field> = <fs_temp>.
+      ENDIF.
+    ENDIF.
+    UNASSIGN: <fs_field>, <fs_temp>, <fs_value>.
+    CLEAR: wa_dd01l-convexit. "DE3K988230 05/26/2021
+  ENDLOOP.
+
+*  LOOP AT it_fields INTO wa_fields.
+*  CLEAR:lf_mask, lf_length.
+*  PERFORM get_mask_length USING wa_fields-name CHANGING  lf_length lf_mask.
+*  PERFORM convert USING wa_fields-name wa_fields-name lf_length lf_mask.
+*  ENDLOOP.
+ENDFORM.                    " CONVERT_DATA
+*&---------------------------------------------------------------------*
+*&      Form  GET_MASK_LENGTH
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_WA_FIELDS_NAME  text
+*      <--P_LF_LENGTH  text
+*      <--P_LF_MASK  text
+*----------------------------------------------------------------------*
+FORM get_mask_length  USING    VALUE(p_0042)
+                      CHANGING pc_length TYPE i
+                               pc_mask TYPE string.
+
+
+  FIELD-SYMBOLS:<fs> TYPE any.
+*--Read the mask associated with the domain
+*  AND THE TOTAL OUTPUT LENGTH OF THE FIELD
+  ASSIGN (p_0042) TO <fs>.
+  CHECK sy-subrc = 0.
+  DESCRIBE FIELD <fs> OUTPUT-LENGTH pc_length
+                                       EDIT MASK pc_mask.
+  REPLACE '==' IN pc_mask WITH ` `.
+  CONDENSE pc_mask NO-GAPS.
+
+ENDFORM.                    " GET_MASK_LENGTH
+*&---------------------------------------------------------------------*
+*&      Form  CONVERT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_WA_FIELDS_NAME  text
+*      -->P_WA_FIELDS_NAME  text
+*      -->P_LF_LENGTH  text
+*      -->P_LF_MASK  text
+*----------------------------------------------------------------------*
+FORM convert  USING    pu_field TYPE any
+                       pu_value TYPE any
+                       pu_length TYPE i
+                       pu_mask TYPE string .
+
+  DATA:lf_convexit    TYPE funcname,
+       i_comp         TYPE cl_abap_structdescr=>component_table,
+       wa_comp        LIKE LINE OF i_comp,
+       wf_type_struct TYPE REF TO cl_abap_structdescr,
+       wf_data_str    TYPE REF TO data..
+  FIELD-SYMBOLS:<fs_t>  TYPE any,
+                <fs_wa> TYPE any.
+*--Dynamically create a target field based on the output length which fits the value returned by the conversion exit.
+  CLEAR:i_comp[], wa_comp.
+  wa_comp-name = 'FIELD'.
+  wa_comp-type ?= cl_abap_elemdescr=>get_c( pu_length ).
+  APPEND wa_comp TO i_comp.
+  TRY.
+      wf_type_struct = cl_abap_structdescr=>create( p_components = i_comp ).
+    CATCH cx_sy_struct_creation.
+  ENDTRY.
+  CREATE DATA : wf_data_str TYPE HANDLE wf_type_struct.
+  ASSIGN wf_data_str->* TO <fs_wa>.
+  CHECK sy-subrc = 0.
+  ASSIGN COMPONENT 'FIELD' OF STRUCTURE <fs_wa> TO <fs_t>.
+  CHECK sy-subrc = 0.
+  WRITE:/.
+  WRITE:/.
+  WRITE :'Field Converted-',pu_field.
+*--Call the corresponding Conversion exit functio module based on the mask retrieved from the domain
+  DO 2 TIMES.
+    IF sy-index = 1.
+      CONCATENATE 'CONVERSION_EXIT_' pu_mask '_INPUT' INTO lf_convexit.
+    ELSE.
+      CONCATENATE 'CONVERSION_EXIT_' pu_mask '_OUTPUT' INTO lf_convexit.
+    ENDIF.
+    CALL FUNCTION lf_convexit
+      EXPORTING
+        input  = pu_value
+      IMPORTING
+        output = <fs_t>.
+    WRITE:/.
+    WRITE: lf_convexit,'-',<fs_t>.
+  ENDDO.
+
+ENDFORM.                    " CONVERT
